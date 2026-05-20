@@ -78,6 +78,54 @@ app.get("/api/adsb", async (req, res) => {
     }
 });
 
+app.get("/metar", async (req, res) => {
+    try {
+        const url = "https://api.checkwx.com/metar/EBLG/decoded";
+        const r = await fetch(url, { headers: { "X-API-Key": process.env.CHECKWX_KEY }});
+        const json = await r.json();
+        res.json(json);
+    } catch (err) {
+        res.json({ fallback: true, raw: "METAR indisponible" });
+    }
+});
+
+app.get("/taf", async (req, res) => {
+    try {
+        const url = "https://api.checkwx.com/taf/EBLG/decoded";
+        const r = await fetch(url, { headers: { "X-API-Key": process.env.CHECKWX_KEY }});
+        const json = await r.json();
+        res.json(json);
+    } catch (err) {
+        res.json({ fallback: true, raw: "TAF indisponible" });
+    }
+});
+
+app.get("/fids", (req, res) => {
+    const now = new Date().toISOString();
+
+    const payload = {
+        arrivals: [
+            { flight: "FX123", from: "CDG", eta: now, status: "ON TIME" }
+        ],
+        departures: [
+            { flight: "FX456", to: "LEJ", etd: now, status: "BOARDING" }
+        ]
+    };
+
+    res.json(payload);
+});
+
+app.get("/sonos", (req, res) => {
+    const payload = {
+        sensors: [
+            { id: 1, lat: 50.64, lon: 5.44, db: 42 },
+            { id: 2, lat: 50.65, lon: 5.45, db: 48 }
+        ]
+    };
+
+    res.json(payload);
+});
+
 // FALLBACK SPA
 app.get("*", (req, res) => {
     res.sendFile(path.join(publicDir, "index.html"));
