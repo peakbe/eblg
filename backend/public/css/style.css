@@ -416,3 +416,25 @@ body {
     font-size: 12px;
     padding: 6px;
 }
+/* ======================================================
+   DEBUG PANEL — PRO+++
+   ====================================================== */
+
+.debug-panel {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.55);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #0ff;
+    z-index: 9999;
+    pointer-events: none;
+}
+
+.debug-panel div {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
