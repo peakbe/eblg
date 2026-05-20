@@ -1,112 +1,139 @@
 // ======================================================
-// RUNWAYS.JS — Cockpit IFR PRO+++
-// - Données pistes EBLG
-// - Corridors IFR (approche + départ)
-// - Calcul vent (headwind / crosswind)
-// - Fournit seuils + corridors pour map.js & sonometers.js
+// METAR — PRO+++
+// - Chargement sécurisé
+// - Détection piste active (04 / 22)
+// - Composantes vent (headwind / crosswind)
+// - Mise à jour UI + carte + sonomètres
 // ======================================================
 
-// ======================================================
-// DONNÉES PISTES
-// ======================================================
-const RUNWAYS = {
-    "04": {
-        heading: 40,
-        threshold: [50.64590, 5.44380],
-        end:       [50.66220, 5.47600]
-    },
-    "22": {
-        heading: 220,
-        threshold: [50.66220, 5.47600],
-        end:       [50.64590, 5.44380]
-    }
-};
+import { ENDPOINTS } from "./config.js";
+import { fetchJSON, updateStatusPanel } from "./helpers.js";
+import { computeWindComponents } from "./runways.js";
+import { drawApproachCorridor, drawDepartureCorridor } from "./map.js";
 
-// ======================================================
-// EXPORT — SEUILS POUR SONO & DISTANCES
-// ======================================================
-export function getRunwayThresholds() {
-    return {
-        "04": {
-            lat: RUNWAYS["04"].threshold[0],
-            lon: RUNWAYS["04"].threshold[1]
-        },
-        "22": {
-            lat: RUNWAYS["22"].threshold[0],
-            lon: RUNWAYS["22"].threshold[1]
+const IS_DEV = location.hostname.includes("localhost");
+const log = (...a) => IS_DEV && console.log("[METAR]", ...a);
+const logErr = (...a) => console.error("[METAR ERROR]", ...a);
+
+let lastMetar = null;
+
+// ------------------------------------------------------
+// INIT
+// ------------------------------------------------------
+export function initMetar() {
+    safeLoadMetar();
+}
+
+// ------------------------------------------------------
+// SAFE LOAD
+// ------------------------------------------------------
+export async function safeLoadMetar() {
+    try {
+        const data = await fetchJSON(ENDPOINTS.metar);
+        if (!data || !data.data || !data.data[0]) {
+            updateStatusPanel("METAR", { error: true });
+            return;
         }
-    };
-}
 
-// ======================================================
-// CALCUL COMPOSANTES VENT — PRO+++
-// ======================================================
-export function computeWindComponents(windDir, windSpeed, runwayHeading) {
-    if (windDir == null || windSpeed == null) {
-        return { headwind: 0, crosswind: 0 };
+        const raw = data.data[0].raw_text;
+        lastMetar = raw;
+
+        updateMetarUI(raw);
+
+        const rwy = detectActiveRunway(raw);
+        window.activeRunway = rwy;
+
+        updateRunwayUI(rwy);
+        updateWindUI(raw, rwy);
+
+        drawApproachCorridor(rwy);
+        drawDepartureCorridor(rwy);
+
+        updateStatusPanel("METAR", { ok: true });
+
+    } catch (err) {
+        logErr("Erreur METAR", err);
+        updateStatusPanel("METAR", { error: true });
     }
-
-    const angle = ((windDir - runwayHeading + 360) % 360);
-    const rad = angle * Math.PI / 180;
-
-    const headwind = Math.round(windSpeed * Math.cos(rad));
-    const crosswind = Math.round(windSpeed * Math.sin(rad));
-
-    return { headwind, crosswind };
 }
 
-// ======================================================
-// CORRIDORS IFR — PRO+++
-// map.js attend un tableau : [{ runway:"04", coords:[...] }, ...]
-// ======================================================
-export function getRunwayCorridors() {
-    const corridors = [];
+// ------------------------------------------------------
+// UI METAR
+// ------------------------------------------------------
+function updateMetarUI(raw) {
+    const el = document.getElementById("metar");
+    if (el) el.textContent = raw || "METAR indisponible";
 
-    Object.keys(RUNWAYS).forEach(rwy => {
-        const r = RUNWAYS[rwy];
-        const th = r.threshold;
-        const hdg = r.heading;
+    const ageEl = document.getElementById("metar-age");
+    if (ageEl) ageEl.textContent = computeMetarAge(raw);
+}
 
-        const rad = hdg * Math.PI / 180;
-        const dx = Math.cos(rad);
-        const dy = Math.sin(rad);
+function computeMetarAge(raw) {
+    if (!raw) return "inconnu";
+    const m = raw.match(/(\d{2})(\d{2})(\d{2})Z/);
+    if (!m) return "inconnu";
 
-        const APP_LEN = 0.045; // ~5 km
-        const DEP_LEN = 0.045;
-        const HALF_WIDTH = 0.008; // ~900 m
+    const day = parseInt(m[1], 10);
+    const hour = parseInt(m[2], 10);
+    const min = parseInt(m[3], 10);
 
-        const appStart = [
-            th[0] - dx * APP_LEN,
-            th[1] - dy * APP_LEN
-        ];
+    const now = new Date();
+    const metarDate = new Date(now.getUTCFullYear(), now.getUTCMonth(), day, hour, min);
 
-        const depEnd = [
-            th[0] + dx * DEP_LEN,
-            th[1] + dy * DEP_LEN
-        ];
+    const diff = (now - metarDate) / 60000;
+    return `${Math.round(diff)} min`;
+}
 
-        const ox = -dy * HALF_WIDTH;
-        const oy = dx * HALF_WIDTH;
+// ------------------------------------------------------
+// Détection piste active
+// ------------------------------------------------------
+function detectActiveRunway(raw) {
+    const m = raw.match(/ (\d{3})(\d{2})KT/);
+    if (!m) return null;
 
-        const approach = [
-            [appStart[0] - ox, appStart[1] - oy],
-            [th[0] - ox, th[1] - oy],
-            [th[0] + ox, th[1] + oy],
-            [appStart[0] + ox, appStart[1] + oy]
-        ];
+    const windDir = parseInt(m[1], 10);
 
-        const departure = [
-            [th[0] - ox, th[1] - oy],
-            [depEnd[0] - ox, depEnd[1] - oy],
-            [depEnd[0] + ox, depEnd[1] + oy],
-            [th[0] + ox, th[1] + oy]
-        ];
+    const diff04 = angleDiff(windDir, 40);
+    const diff22 = angleDiff(windDir, 220);
 
-        corridors.push({
-            runway: rwy,
-            coords: [...approach, ...departure]
-        });
-    });
+    return diff04 < diff22 ? "04" : "22";
+}
 
-    return corridors;
+function angleDiff(a, b) {
+    let d = Math.abs(a - b) % 360;
+    return d > 180 ? 360 - d : d;
+}
+
+// ------------------------------------------------------
+// UI RWY
+// ------------------------------------------------------
+function updateRunwayUI(rwy) {
+    const box = document.getElementById("rwy-indicator");
+    if (!box) return;
+
+    box.textContent = rwy ? `RWY ${rwy}` : "RWY --";
+}
+
+// ------------------------------------------------------
+// UI VENT
+// ------------------------------------------------------
+function updateWindUI(raw, rwy) {
+    if (!raw || !rwy) return;
+
+    const m = raw.match(/ (\d{3})(\d{2})KT/);
+    if (!m) return;
+
+    const windDir = parseInt(m[1], 10);
+    const windSpeed = parseInt(m[2], 10);
+
+    const rwyHeading = rwy === "04" ? 40 : 220;
+    const { headwind, crosswind } = computeWindComponents(windDir, windSpeed, rwyHeading);
+
+    const el = document.getElementById("runway-wind");
+    if (el) {
+        el.innerHTML = `
+            Headwind : <b>${headwind} kt</b><br>
+            Crosswind : <b>${crosswind} kt</b>
+        `;
+    }
 }
